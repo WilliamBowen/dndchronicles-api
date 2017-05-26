@@ -1,2 +1,3 @@
 var mongoose = require("mongoose");
-mongoose.connect('mongodb://admin:password@ds019876.mlab.com:19876/db_dnd')
+var config = require('config.json');
+mongoose.connect(config.connectionString);

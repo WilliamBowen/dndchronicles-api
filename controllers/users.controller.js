@@ -1,83 +1,150 @@
-var config = require('config.json');
+var config = require('../config.json');
 var express = require("express");
 var router = express.Router();
-var userService = require('services/user.service');
+var bodyParser = require('body-parser');
+router.use(bodyParser.urlencoded({extended: false }));
+var mongoose = require('mongoose');
+var mongo = require('mongodb');
+var jwt = require('jsonwebtoken');
+var bcrypt = require('bcryptjs');
 
 router.post('/authenticate', authenticate);
 router.post('/register', register);
 router.get('/', getAll);
+router.get("/:id", getOne);
 router.get('/current', getCurrent);
 router.put('/:id', update);
 router.delete('/:id', _delete);
 
+var User = require('../models/User');
+
 module.exports = router;
 
 function authenticate(req, res) {
-    userService.authenticate(req.body.username, req.body.password)
-        .then(function(user) {
-            if (user) {
-                // authentication successful
-                res.send(user);
-            } else {
-                // authentication failed
-                res.status(401).send('Username or password is incorrect');
-            }
-        })
-        .catch(function (err) {
-            res.status(400).send(err);
-        });
+    User.findOne({username: req.body.username}, function(err, user) {
+        if (err) return res.status(500).send(err.name + ': ' + err.message);
+        if (user && bcrypt.compareSync(req.body.password, user.hash)) {
+           //authentication successful
+           res.status(200).send({
+              _id: user._id,
+              username: user.username,
+              firstName: user.firstName,
+              lastName: user.lastName,
+              token: jwt.sign({sub: user._id}, config.secret)
+           });
+        } else {
+            //authentication failed
+            res.status(401).send('Username or password is incorrect');
+        }
+    });
 }
 
 function register(req, res) {
-    userService.create(req.body)
-        .then(function () {
-            res.sendStatus(200);
-        })
-        .catch(function (err) {
-            res.status(400).send(err);
+     User.findOne(
+        {username: req.body.username },
+        function (err, user) {
+            if (err) return res.status(400).send(err);
+            
+            if (user) {
+                //username already exists
+                return res.status(400).send('Username "' + req.body.username + '" is already taken');
+            } else {
+                createUser();
+            }
+        }
+    );
+    
+    function createUser() {
+         User.create({
+            _id: req.body._id,
+            username: req.body.username,
+            firstName: req.body.firstName,
+            lastName: req.body.lastName,
+            hash: bcrypt.hashSync(req.body.password, 10)
+        }, function (err, user) {
+            if(err) return res.status(400).send(err.name + ": " + err.message);
+            res.status(200).send(user);
         });
+    }
 }
 
 function getAll(req, res) {
-    userService.getAll()
-        .then(function (users) {
-            res.send(users);
-        })
-        .catch(function (err) {
-            res.status(400).send(err);
-        });
+    User.find({}, function (err, users) {
+        if(err) return res.status(500).send(err.name + ": " + err.message);
+        res.status(200).send(users); 
+    });
+}
+
+function getOne(req, res) {
+    User.findById(req.params.id, function(err, user) {
+        if(err) return res.status(500).send(err.name+ ": " + err.message);
+        res.status(200).send(user);
+    });
 }
 
 function getCurrent(req, res) {
-    userService.getById(req.user.sub)
-        .then(function (user) {
-            if (user) {
-                res.send(user);
-            } else {
-                res.sendStatus(404);
-            }
-        })
-        .catch(function (err) {
-            res.status(400).send(err);
-        });
+   User.findById(req.user.sub, function(err, user) {
+        if(err) return res.status(500).send(err.name+ ": " + err.message);
+        if(user) {
+            res.status(200).send(user);
+        } else {
+            res.senStatus(404);
+        }
+    });
 }
 
 function update(req, res) {
-    userService.update(req.params._id, req.body)
-        .then(function () {
-            res.sendStatus(200);
-        })
-        .catch(function (err) {
-            res.status(400).send(err);
-        });
+    
+    //validation
+    User.findById(req.params.id, function(err, user) {
+       if (err) return res.status(400).send(err.name + ': ' + err.message);
+       
+       if (user.username !== req.body.username) {
+           //username has changed so check if the new username is already taken
+          User.findOne(
+               { username: req.body.username },
+               function (err, user) {
+                  if (err) return res.status(400).send(err.name + ': ' + err.message);
+                  
+                  if (user) {
+                      // username already exists
+                      return res.status(400).send('Username "' + req.body.username + '" is already taken');
+                  } else {
+                      updateUser();
+                  }
+               });
+       } else {
+           updateUser();
+       }
+    });
+    
+    function updateUser() {
+        //fields to update
+        var set = {
+            firstName: req.body.firstName,
+            lastName: req.body.lastName,
+            username: req.body.username
+        };
+        
+        //update password if it was entered
+        if (req.body.password) {
+            set.hash = bcrypt.hashSync(req.body.password, 10);
+        }
+        User.findByIdAndUpdate(
+            req.params.id,
+            {$set: set },
+            function (err, doc) {
+                if (err) return res.status(400).send(err.name + ': ' + err.message);
+            });
+        res.status(200).send();
+    }
 }
 
 function _delete(req, res) {
-    userService.delete(req.params._id)
-        .then(function () {
-            res.sendStatus(200);
-        })
-        .catch(function (err) {
-            res.status(400).send(err);
-        })
+    User.findByIdAndRemove(req.params.id, function(err, user) {
+      if (err) return res.status(500).send(err.name + ": " + err.message);
+      console.log(user);
+      res.status(200).send("User was deleted");
+     
+    });
 }
